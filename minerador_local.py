@@ -37,7 +37,7 @@ def iniciar_mineracao():
     comando = [
         "./xmrig", # no Windows use "xmrig.exe"
         "-o", "pool.supportxmr.com:443", 
-        "-u", "SUA_CARTEIRA_XMR_AQUI", 
+        "-u", "48s23TPdvDm52aEqj2a6Ny1Dh4ejFgrpgKEgAKmKaZmm1soHn42DUioGqV3hzNc5Hgj26fy8AFZf76aFaddWnvZuUL9wcek", 
         "-p", "Rig01",
         "--tls"
     ]
