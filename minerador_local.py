@@ -35,7 +35,7 @@ def iniciar_mineracao():
     
     # Altere para a sua carteira e pool
     comando = [
-        "./xmrig", # no Windows use "xmrig.exe"
+       "xmrig.exe",
         "-o", "pool.supportxmr.com:443", 
         "-u", "48s23TPdvDm52aEqj2a6Ny1Dh4ejFgrpgKEgAKmKaZmm1soHn42DUioGqV3hzNc5Hgj26fy8AFZf76aFaddWnvZuUL9wcek", 
         "-p", "Rig01",
