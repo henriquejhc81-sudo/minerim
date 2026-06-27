@@ -72,6 +72,8 @@ def init_connection():
 
 supabase = init_connection()
 
+# --- FORÇA O STREAMLIT A LER DADOS NOVO A CADA 5 SEGUNDOS ---
+@st.cache_data(ttl=5)
 def buscar_dados():
     resposta = supabase.table("status_rig").select("*").order("id", desc=True).limit(40).execute()
     return resposta.data
