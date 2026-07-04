@@ -10,7 +10,7 @@ def conectar_supabase():
     return create_client(url, key)
 
 supabase = conectar_supabase()
-exchange = ccxt.binance()
+exchange = ccxt.kucoin()
 
 # Nova função: Calcula o RSI nativamente sem depender do pandas-ta
 def calcular_rsi(series, period=14):
