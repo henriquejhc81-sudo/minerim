@@ -76,3 +76,40 @@ st.dataframe(
     hide_index=True,
     height=400
 )
+st.markdown("---")
+st.markdown("### 🏛️ RELATÓRIO FORENSE INSTITUCIONAL")
+
+# Coletando a data e hora atual do sistema
+import pandas as pd
+data_hora_atual = pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')
+
+# Separando quem está seguro e quem está em perigo
+ativos_quarentena = df[df['Veredicto'].str.contains('QUARENTENA', na=False)]
+ativos_liberados = df[df['Veredicto'].str.contains('LIBERADO', na=False)]
+
+# Definindo o Status do Mercado
+if len(ativos_quarentena) > len(ativos_liberados):
+    status_mercado = "🔴 ALERTA VERMELHO (Risco Sistêmico Alto)"
+elif len(ativos_quarentena) > 0:
+    status_mercado = "🟡 ATENÇÃO (Risco Moderado)"
+else:
+    status_mercado = "🟢 ESTÁVEL (Risco Controlado)"
+
+# Escrevendo o relatório no estilo institucional
+relatorio = f"""
+> **DATA DA ANÁLISE:** {data_hora_atual}  
+> **DIRETRIZ DE OPERAÇÃO:** {status_mercado}  
+
+**RESUMO EXECUTIVO:**  
+No presente momento, a varredura algorítmica de telemetria analisou a cesta de ativos designada. Constata-se que **{len(ativos_quarentena)}** ativos encontram-se em estado de exceção (Quarentena), devido a anomalias no RSI ou distanciamento da EMA 20, enquanto **{len(ativos_liberados)}** operam dentro dos parâmetros de normalidade e segurança.
+
+**LAUDO DE EXAUSTÃO:**
+"""
+st.markdown(relatorio)
+
+# Mostra o motivo exato de cada moeda que está em perigo
+if not ativos_quarentena.empty:
+    for index, row in ativos_quarentena.iterrows():
+        st.warning(f"⚠️ **Ativo {row['Ativo']} bloqueado.** Motivo detectado: {row['Motivo']}")
+else:
+    st.success("✅ **Nenhuma anomalia detectada.** Todos os ativos monitorados estão em zona segura para operação.")
