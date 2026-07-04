@@ -1,6 +1,5 @@
 import ccxt
 import pandas as pd
-import pandas_ta as ta
 import streamlit as st
 from supabase import create_client, Client
 
@@ -13,13 +12,24 @@ def conectar_supabase():
 supabase = conectar_supabase()
 exchange = ccxt.binance()
 
+# Nova função: Calcula o RSI nativamente sem depender do pandas-ta
+def calcular_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
 def calcular_indicadores(simbolo, timeframe='15m'):
     try:
         velas = exchange.fetch_ohlcv(simbolo, timeframe, limit=100)
         df = pd.DataFrame(velas, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        df['RSI'] = df.ta.rsi(length=14)
-        df['EMA_20'] = df.ta.ema(length=20)
+        # Calculando RSI e EMA usando pandas puro!
+        df['RSI'] = calcular_rsi(df['close'], 14)
+        df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
         
         atual = df.iloc[-1]
         preco = atual['close']
@@ -50,7 +60,6 @@ def calcular_indicadores(simbolo, timeframe='15m'):
         }
         
     except Exception as e:
-        # CORREÇÃO CRÍTICA AQUI: O erro agora retorna todas as colunas para não quebrar a tabela
         return {
             "Ativo": simbolo.replace('/USDT', ''),
             "Preço": "ERRO API",
