@@ -1,26 +1,13 @@
 import ccxt
 import pandas as pd
 import streamlit as st
-from supabase import create_client, Client
-from datetime import datetime
 
-# Conexão com Supabase com tratamento de erro
+# Conexão com a KuCoin
 @st.cache_resource
-def conectar_supabase():
-    try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
-    except Exception as e:
-        st.warning("Aviso: Credenciais do Supabase não encontradas no st.secrets.")
-        return None
+def iniciar_exchange():
+    return ccxt.kucoin({'enableRateLimit': True})
 
-supabase = conectar_supabase()
-
-# Instanciando KuCoin com Rate Limit ativado (Evita block da corretora)
-exchange = ccxt.kucoin({
-    'enableRateLimit': True,
-})
+exchange = iniciar_exchange()
 
 def calcular_rsi(series, period=14):
     delta = series.diff()
@@ -31,39 +18,68 @@ def calcular_rsi(series, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-# Agora aceita limites customizáveis via Streamlit
-def calcular_indicadores(simbolo, timeframe='15m', limite_rsi=70, limite_ema=1.03):
+def classificar_ativo(simbolo):
+    """Autobolt: Define parâmetros dinâmicos baseados no grupo de volatilidade."""
+    if simbolo in ['BTC/USDT', 'ETH/USDT']:
+        return 'Alta Liquidez', 75, 1.025  # Tolera menos esticamento
+    elif simbolo in ['AVAX/USDT', 'NEAR/USDT', 'SUI/USDT']:
+        return 'Alta Vol.', 85, 1.050      # Tolera mais volatilidade
+    else:
+        return 'Média Vol.', 80, 1.035     # Padrão para BNB, SOL, etc.
+
+def analise_autobolt(simbolo):
+    """Analisa múltiplos tempos gráficos e aplica as 3 Travas."""
     try:
-        velas = exchange.fetch_ohlcv(simbolo, timeframe, limit=100)
-        df = pd.DataFrame(velas, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        grupo, limite_rsi, limite_ema = classificar_ativo(simbolo)
         
-        df['RSI'] = calcular_rsi(df['close'], 14)
-        df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
+        # Busca dados Macro (4h) e Micro (15m)
+        velas_4h = exchange.fetch_ohlcv(simbolo, '4h', limit=200)
+        velas_15m = exchange.fetch_ohlcv(simbolo, '15m', limit=100)
         
-        atual = df.iloc[-1]
+        df_4h = pd.DataFrame(velas_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_15m = pd.DataFrame(velas_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # Cálculos Micro (15m)
+        df_15m['RSI'] = calcular_rsi(df_15m['close'], 14)
+        df_15m['EMA_20'] = df_15m['close'].ewm(span=20, adjust=False).mean()
+        
+        # Cálculos Macro (4h) - Média de 200 para Tendência
+        df_4h['EMA_200'] = df_4h['close'].ewm(span=200, adjust=False).mean()
+        
+        atual = df_15m.iloc[-1]
+        macro_atual = df_4h.iloc[-1]
+        
         preco = atual['close']
         rsi = atual['RSI']
-        ema = atual['EMA_20']
+        ema_20 = atual['EMA_20']
+        ema_200_macro = macro_atual['EMA_200']
         
         status = "🟢 LIBERADO"
-        motivo = "-"
+        motivo = "Tendência de Alta & Sem Exaustão"
         
-        if pd.isna(rsi) or pd.isna(ema):
+        # As 3 Travas do Autobolt
+        if pd.isna(rsi) or pd.isna(ema_20):
             status = "⚪ CALCULANDO..."
-            motivo = "Aguardando volume"
+            motivo = "Aguardando volume histórico"
+            
+        elif preco < ema_200_macro:
+            status = "🟠 BLOQUEIO MACRO"
+            motivo = "Tendência de Baixa no Gráfico 4h"
+            
         elif rsi >= limite_rsi:
             status = "🔴 QUARENTENA"
-            motivo = f"RSI >= {limite_rsi} (Sobrecomprado)"
-        elif preco > (ema * limite_ema): 
+            motivo = f"RSI Micro >= {limite_rsi} (Topo)"
+            
+        elif preco > (ema_20 * limite_ema): 
             status = "🔴 QUARENTENA"
-            motivo = f"Preço esticado (> {(limite_ema - 1)*100}% da EMA)"
+            motivo = f"Preço esticado (> {(limite_ema - 1)*100:.1f}% da EMA)"
 
         return {
             "Ativo": simbolo.replace('/USDT', ''),
+            "Grupo": grupo,
             "Preço": f"${preco:.4f}",
-            "RSI 14": round(rsi, 2),
-            "EMA 20": round(ema, 2),
-            "Distância EMA": f"{((preco / ema) - 1) * 100:.2f}%",
+            "RSI 14 (Micro)": round(rsi, 2),
+            "Distância EMA": f"{((preco / ema_20) - 1) * 100:.2f}%",
             "Veredicto": status,
             "Motivo": motivo
         }
@@ -71,25 +87,18 @@ def calcular_indicadores(simbolo, timeframe='15m', limite_rsi=70, limite_ema=1.0
     except Exception as e:
         return {
             "Ativo": simbolo.replace('/USDT', ''),
+            "Grupo": "Desconhecido",
             "Preço": "ERRO API",
-            "RSI 14": 0.0,
-            "EMA 20": 0.0,
+            "RSI 14 (Micro)": 0.0,
             "Distância EMA": "0%",
-            "Veredicto": "⚫ FALHA DE CONEXÃO",
-            "Motivo": f"Erro: {str(e)[:20]}..."
+            "Veredicto": "⚫ FALHA",
+            "Motivo": "Erro de conexão com corretora"
         }
 
-# Função adaptada para receber parâmetros do Dashboard
-def varredura_global(esquadrao, timeframe, limite_rsi, limite_ema):
-    resultados = []
-    for moeda in esquadrao:
-        dados = calcular_indicadores(moeda, timeframe, limite_rsi, limite_ema)
-        resultados.append(dados)
+def varredura_global():
+    esquadrao = [
+        'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'ADA/USDT', 
+        'DOT/USDT', 'LINK/USDT', 'AVAX/USDT', 'NEAR/USDT', 'SUI/USDT'
+    ]
+    resultados = [analise_autobolt(moeda) for moeda in esquadrao]
     return resultados
-
-# Evolução futura: Função para salvar logs da quarentena no Supabase
-def registrar_log_supabase(ativos_quarentena):
-    if supabase is not None and not ativos_quarentena.empty:
-        # Exemplo de como você vai salvar no futuro:
-        # supabase.table("logs_operacionais").insert({"data": datetime.now().isoformat(), "ativos": ativos_quarentena.to_dict()}).execute()
-        pass
