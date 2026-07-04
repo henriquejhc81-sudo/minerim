@@ -1,146 +1,84 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
-import time
+import motor_mestre # Importa o nosso motor matemático
 
-# Configuração da Página
-st.set_page_config(page_title="CYBER RIG // TELEMETRY", layout="wide", page_icon="⚡")
+# 1. Configuração da Página (Design e Título)
+st.set_page_config(
+    page_title="MESTRE BLOOMBERG // TELEMETRY_OS",
+    page_icon="⚡",
+    layout="wide"
+)
 
-# --- INJEÇÃO DE CSS CYBERPUNK ---
+# 2. CSS Personalizado (Estética Cyber_Rig / Neon)
 st.markdown("""
-<style>
-    /* Fundo principal escurão e fonte futurista */
+    <style>
     .stApp {
-        background-color: #08080C;
-        color: #00F0FF;
+        background-color: #0E1117;
+    }
+    .titulo-neon {
+        color: #00FF41;
         font-family: 'Courier New', Courier, monospace;
-    }
-    
-    /* Títulos com brilho Neon */
-    h1, h2, h3 {
-        color: #00FF66 !important;
-        text-shadow: 0 0 10px rgba(0, 255, 102, 0.5);
-        font-weight: 800 !important;
-        letter-spacing: 2px;
-    }
-    
-    /* Cards de Métricas Customizados */
-    div[data-testid="metric-container"] {
-        background: #12121C;
-        border: 1px solid #00F0FF;
-        box-shadow: 0 0 15px rgba(0, 240, 255, 0.2);
-        padding: 15px;
-        border-radius: 4px;
-        border-left: 5px solid #00FF66;
-    }
-    
-    /* Cor dos rótulos das métricas */
-    div[data-testid="stMetricLabel"] > label {
-        color: #A0A0B0 !important;
-        font-size: 0.9rem !important;
-    }
-    
-    /* Cor dos valores grandes das métricas */
-    div[data-testid="stMetricValue"] > div {
-        color: #00FF66 !important;
-        text-shadow: 0 0 8px rgba(0, 255, 102, 0.6);
-    }
-    
-    /* Botão Desligar (Estilo Alerta Vermelho) */
-    div.stButton > button:first-child {
-        background-color: #1A0008;
-        color: #FF0055;
-        border: 2px solid #FF0055;
-        box-shadow: 0 0 10px rgba(255, 0, 85, 0.4);
         font-weight: bold;
-        transition: all 0.3s ease;
+        text-shadow: 0 0 5px #00FF41;
     }
-    div.stButton > button:first-child:hover {
-        background-color: #FF0055;
-        color: #000000;
-        box-shadow: 0 0 20px rgba(255, 0, 85, 0.8);
+    .status-box {
+        background-color: #1E1E1E;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 5px solid #00FF41;
+        font-family: 'Courier New', Courier, monospace;
+        color: white;
     }
-</style>
+    </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXÃO COM BANCO ---
-@st.cache_resource
-def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+# 3. Cabeçalho do Painel
+st.markdown('<h1 class="titulo-neon">⚡ MESTRE BLOOMBERG // TELEMETRY_OS v2.0</h1>', unsafe_allow_html=True)
+st.markdown('<div class="status-box">SYSTEM STATUS: OPERACIONAL // RISCO CONTROLADO</div>', unsafe_allow_html=True)
+st.write("---")
 
-supabase = init_connection()
+# Botão de atualização manual (Como o seu antigo "Reboot Sync")
+if st.button("🔄 REBOOT SYNC // ATUALIZAR DADOS"):
+    st.cache_data.clear() # Limpa o cache para forçar a busca de novos dados
 
-# --- FORÇA O STREAMLIT A LER DADOS NOVO A CADA 5 SEGUNDOS ---
-@st.cache_data(ttl=5)
-def buscar_dados():
-    resposta = supabase.table("status_rig").select("*").order("id", desc=True).limit(40).execute()
-    return resposta.data
+# 4. Buscando os dados do Motor Mestre
+with st.spinner("Conectando aos satélites da Binance e calculando scores..."):
+    # Chama a função que varre as 10 moedas
+    dados_mercado = motor_mestre.varredura_global()
+    df = pd.DataFrame(dados_mercado)
 
-def enviar_comando(comando):
-    supabase.table("status_rig").insert({
-        "hashrate": "0 H/s",
-        "temperatura": "0 °C",
-        "comando_status": comando
-    }).execute()
+# 5. Lógica de Cores para a Tabela (Verde = Liberado, Vermelho = Quarentena)
+def colorir_veredicto(val):
+    if "LIBERADO" in str(val):
+        return 'color: #00FF41; font-weight: bold;'
+    elif "QUARENTENA" in str(val):
+        return 'color: #FF0000; font-weight: bold;'
+    return 'color: white;'
 
-# --- CABEÇALHO ---
-st.title("⚡ CYBER_RIG // TELEMETRY_OS v1.0")
-st.markdown("`SYSTEM STATUS: SECURE CONNECTION ESTABLISHED`")
-st.divider()
+# Aplica a cor apenas na coluna "Veredicto"
+df_estilizado = df.style.map(colorir_veredicto, subset=['Veredicto'])
 
-col_top1, col_top2 = st.columns([1, 6])
-with col_top1:
-    if st.button("🔄 REBOOT SYNC"):
-        st.rerun()
+# 6. Exibindo as Métricas Globais Rápidas
+col1, col2, col3 = st.columns(3)
 
-dados = buscar_dados()
+# Pegando o preço do BTC para exibir no topo (ele é o primeiro da lista G1)
+preco_btc = df.iloc[0]['Preço'] if not df.empty else "N/A"
+total_quarentena = len(df[df['Veredicto'].str.contains('QUARENTENA')]) if not df.empty else 0
 
-if dados:
-    dado_atual = dados[0]
-    
-    # Grid de Métricas Principais
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(label="HASHRATE ATIVO", value=dado_atual.get("hashrate", "0 H/s"))
-    with col2:
-        st.metric(label="TEMP NÚCLEO", value=dado_atual.get("temperatura", "0 °C"))
-    with col3:
-        status_code = dado_atual.get("comando_status", "rodar")
-        status_display = "ONLINE // MINING" if status_code == "rodar" else "HALTED // STOPPED"
-        st.metric(label="STATUS OPERACIONAL", value=status_display)
+with col1:
+    st.metric(label="Rei do Mercado (BTC)", value=preco_btc)
+with col2:
+    st.metric(label="Ativos em Quarentena", value=f"{total_quarentena} / 10")
+with col3:
+    st.metric(label="Circuit Breaker Macro", value="ARMADO", delta="Defesa Ativa")
 
-    st.markdown("### 📊 FLUXO DE HASHING EM TEMPO REAL")
-    
-    # Tratamento de dados para Gráfico Moderno
-    df = pd.DataFrame(dados)
-    df['Hashrate (H/s)'] = df['hashrate'].str.extract(r'([0-9.]+)').astype(float)
-    df['Temp (°C)'] = df['temperatura'].str.extract(r'([0-9.]+)').astype(float)
-    df = df.iloc[::-1].reset_index(drop=True)
-    
-    # Gráfico com cores nativas adaptadas ao tema escuro
-    st.area_chart(df[['Hashrate (H/s)']], color="#00FF66")
-    
-    with st.expander("👁️ VER LOGS BRUTOS DO SISTEMA"):
-        st.dataframe(df[['created_at', 'hashrate', 'temperatura', 'comando_status']], use_container_width=True)
+st.write("---")
+st.markdown('<h3 class="titulo-neon">📊 RADAR TÁTICO DE EXAUSTÃO (15m)</h3>', unsafe_allow_html=True)
 
-else:
-    st.info("Aguardando pulso de dados da máquina local... Inicie o script no terminal.")
-
-st.divider()
-
-# Painel de Controle Crítico
-st.markdown("### 🎛️ CONTROLE DE ENERGIA")
-col_btn1, col_btn2 = st.columns(2)
-
-with col_btn1:
-    if st.button("🚨 ABORTAR OPERAÇÃO (KILL SWITCH)", use_container_width=True):
-        enviar_comando("parar")
-        st.toast("Sinal de parada emergencial enviado!")
-
-with col_btn2:
-    if st.button("⚡ RESTAURAR ENERGIA (START)", use_container_width=True):
-        enviar_comando("rodar")
-        st.toast("Sistema liberado para mineração.")
+# 7. Desenhando a Tabela na Tela
+st.dataframe(
+    df_estilizado,
+    use_container_width=True,
+    hide_index=True,
+    height=400
+)
