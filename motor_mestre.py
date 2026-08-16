@@ -1,6 +1,10 @@
 import ccxt
 import pandas as pd
 import streamlit as st
+from datetime import datetime
+import pytz
+
+tz_br = pytz.timezone('America/Sao_Paulo')
 
 @st.cache_resource
 def iniciar_exchange():
@@ -8,6 +12,22 @@ def iniciar_exchange():
 
 exchange = iniciar_exchange()
 
+# ==========================================
+# MEMÓRIA DO SIMULADOR (PAPER TRADING)
+# ==========================================
+@st.cache_resource
+def get_simulador_state():
+    return {
+        'gatilhos': {},       # Guarda os gatilhos armados: {moeda: preco_gatilho}
+        'posicoes': {},       # Operações em andamento: {moeda: {entrada, tp, sl, hora}}
+        'historico': [],      # Lista de operações fechadas
+        'saldo_virtual': 10000.0, # Começa com uma banca fictícia de 10 mil dólares
+        'pnl_total': 0.0      # Rendimento Total em %
+    }
+
+# ==========================================
+# CÁLCULOS MATEMÁTICOS E CLASSIFICAÇÃO
+# ==========================================
 def calcular_rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0)
@@ -18,16 +38,11 @@ def calcular_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def classificar_ativo(simbolo):
-    # Retorna: Grupo, Limite RSI, Limite EMA, Fator de Queda (Sangramento esperado)
-    if simbolo in ['BTC/USDT', 'ETH/USDT']:
-        return 'Alta Liquidez', 75, 1.025, 0.0070  # Espera queda de -0.70% para gatilho
-    elif simbolo in ['AVAX/USDT', 'NEAR/USDT', 'SUI/USDT']:
-        return 'Alta Vol.', 85, 1.050, 0.0150      # Espera queda de -1.50% para gatilho
-    else:
-        return 'Média Vol.', 80, 1.035, 0.0100     # Espera queda de -1.00% para gatilho
+    if simbolo in ['BTC/USDT', 'ETH/USDT']: return 'Alta Liquidez', 75, 1.025, 0.0070
+    elif simbolo in ['AVAX/USDT', 'NEAR/USDT', 'SUI/USDT']: return 'Alta Vol.', 85, 1.050, 0.0150
+    else: return 'Média Vol.', 80, 1.035, 0.0100
 
 def buscar_fechamento(simbolo, timeframe):
-    """Função auxiliar para buscar apenas o preço de fechamento de um TF específico."""
     velas = exchange.fetch_ohlcv(simbolo, timeframe, limit=20)
     df = pd.DataFrame(velas, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['EMA_20'] = df['close'].ewm(span=20, adjust=False).mean()
@@ -38,21 +53,15 @@ def analise_autobolt(simbolo):
     try:
         grupo, limite_rsi, limite_ema, fator_queda = classificar_ativo(simbolo)
         
-        # 1. ANÁLISE MULTI-TIMEFRAME (2h, 4h, 6h, 12h)
-        # O objetivo é verificar se todos os tempos gráficos maiores estão apontando para cima
+        # 1. ANÁLISE MACRO
         preco_2h, ema_2h = buscar_fechamento(simbolo, '2h')
         preco_4h, ema_4h = buscar_fechamento(simbolo, '4h')
         preco_6h, ema_6h = buscar_fechamento(simbolo, '6h')
         preco_12h, ema_12h = buscar_fechamento(simbolo, '12h')
         
-        # Calcula Força Institucional (Quantos TFs estão em tendência de alta?)
-        score_alta = 0
-        if preco_2h > ema_2h: score_alta += 1
-        if preco_4h > ema_4h: score_alta += 1
-        if preco_6h > ema_6h: score_alta += 1
-        if preco_12h > ema_12h: score_alta += 1
+        score_alta = sum([preco_2h > ema_2h, preco_4h > ema_4h, preco_6h > ema_6h, preco_12h > ema_12h])
         
-        # 2. ANÁLISE MICRO PARA ENTRADA (15m)
+        # 2. ANÁLISE MICRO
         velas_15m = exchange.fetch_ohlcv(simbolo, '15m', limit=100)
         df_15m = pd.DataFrame(velas_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['RSI'] = calcular_rsi(df_15m['close'], 14)
@@ -63,37 +72,22 @@ def analise_autobolt(simbolo):
         rsi = atual['RSI']
         ema_micro = atual['EMA_20']
         
-        # 3. CÁLCULO DO GATILHO DINÂMICO
-        # Se a tendência macro for muito forte (score 4), compramos num recuo menor.
-        # Se for mais fraca, esperamos sangrar mais para ter segurança.
-        ajuste_forca = (4 - score_alta) * 0.002 # Adiciona 0.2% de sangramento exigido para cada TF que não estiver em alta
+        # 3. GATILHO
+        ajuste_forca = (4 - score_alta) * 0.002
         queda_alvo = fator_queda + ajuste_forca
-        
         preco_gatilho = preco_atual * (1 - queda_alvo)
         
-        status = "🟢 GATILHO ARMADO"
-        motivo = f"Tendência validada em {score_alta}/4 TFs."
+        status, motivo = "🟢 GATILHO ARMADO", f"Tendência em {score_alta}/4 TFs."
         
-        # 4. AS TRAVAS DE SEGURANÇA
+        # 4. TRAVAS
         if score_alta < 2:
-            status = "🟠 BLOQUEIO MACRO"
-            motivo = "Rejeição: Tendência de Baixa nos TFs maiores."
-            preco_gatilho = 0.0 # Zera o gatilho para o robô executor ignorar
-            
+            status, motivo, preco_gatilho = "🟠 BLOQUEIO MACRO", "Rejeição: Tendência de Baixa Macro.", 0.0
         elif pd.isna(rsi) or pd.isna(ema_micro):
-            status = "⚪ CALCULANDO..."
-            motivo = "Aguardando volume histórico."
-            preco_gatilho = 0.0
-            
+            status, motivo, preco_gatilho = "⚪ CALCULANDO...", "Aguardando volume.", 0.0
         elif rsi >= limite_rsi:
-            status = "🔴 QUARENTENA"
-            motivo = f"RSI Micro >= {limite_rsi} (Risco de Correção Forte)."
-            preco_gatilho = 0.0
-            
+            status, motivo, preco_gatilho = "🔴 QUARENTENA", f"RSI Topo >= {limite_rsi}.", 0.0
         elif preco_atual > (ema_micro * limite_ema): 
-            status = "🔴 QUARENTENA"
-            motivo = f"Preço muito esticado da média."
-            preco_gatilho = 0.0
+            status, motivo, preco_gatilho = "🔴 QUARENTENA", "Preço esticado.", 0.0
 
         return {
             "Ativo": simbolo.replace('/USDT', ''),
@@ -102,24 +96,68 @@ def analise_autobolt(simbolo):
             "Gatilho Executor": f"${preco_gatilho:.4f}" if preco_gatilho > 0 else "AGUARDAR",
             "Alvo Queda": f"-{(queda_alvo * 100):.2f}%",
             "Veredicto": status,
-            "Motivo": motivo
+            "Motivo": motivo,
+            "_raw_preco": preco_atual # Usado internamente pelo simulador
         }
-        
     except Exception as e:
-        return {
-            "Ativo": simbolo.replace('/USDT', ''),
-            "Preço Atual": "ERRO API",
-            "Score Macro": "0/4",
-            "Gatilho Executor": "FALHA",
-            "Alvo Queda": "N/A",
-            "Veredicto": "⚫ FALHA DE REDE",
-            "Motivo": str(e)[:30]
-        }
+        return {"Ativo": simbolo.replace('/USDT', ''), "Preço Atual": "ERRO API", "Score Macro": "0/4", "Gatilho Executor": "FALHA", "Alvo Queda": "N/A", "Veredicto": "⚫ FALHA", "Motivo": "Erro", "_raw_preco": 0}
+
+# ==========================================
+# NÚCLEO DO SIMULADOR INSTITUCIONAL
+# ==========================================
+def gerenciar_simulador(resultados):
+    sim = get_simulador_state()
+    
+    for res in resultados:
+        simbolo = res['Ativo']
+        preco_atual = res['_raw_preco']
+        
+        if preco_atual == 0: continue
+        
+        # 1. VERIFICA POSIÇÕES EM ANDAMENTO (TAKE PROFIT OU STOP LOSS)
+        if simbolo in sim['posicoes']:
+            pos = sim['posicoes'][simbolo]
+            
+            if preco_atual >= pos['tp']: # Bateu no lucro
+                lucro_pct = (pos['tp'] / pos['entrada']) - 1
+                lucro_usd = (sim['saldo_virtual'] * 0.10) * lucro_pct # Risco de 10% da banca por trade
+                sim['saldo_virtual'] += lucro_usd
+                sim['pnl_total'] += lucro_pct * 100
+                sim['historico'].insert(0, {'Ativo': simbolo, 'Resultado': '✅ WIN', 'Entrada': f"${pos['entrada']:.4f}", 'Saída': f"${pos['tp']:.4f}", 'Lucro/Perda': f"+{lucro_pct*100:.2f}%", 'Data': datetime.now(tz_br).strftime('%d/%m %H:%M')})
+                del sim['posicoes'][simbolo]
+                
+            elif preco_atual <= pos['sl']: # Bateu no loss
+                perda_pct = 1 - (pos['sl'] / pos['entrada'])
+                perda_usd = (sim['saldo_virtual'] * 0.10) * perda_pct
+                sim['saldo_virtual'] -= perda_usd
+                sim['pnl_total'] -= perda_pct * 100
+                sim['historico'].insert(0, {'Ativo': simbolo, 'Resultado': '❌ LOSS', 'Entrada': f"${pos['entrada']:.4f}", 'Saída': f"${pos['sl']:.4f}", 'Lucro/Perda': f"-{perda_pct*100:.2f}%", 'Data': datetime.now(tz_br).strftime('%d/%m %H:%M')})
+                del sim['posicoes'][simbolo]
+                
+        # 2. VERIFICA NOVAS COMPRAS SE O GATILHO FOI ATINGIDO
+        else:
+            if simbolo in sim['gatilhos'] and preco_atual <= sim['gatilhos'][simbolo]:
+                # Compra Efetuada! Define Alvos (3% Lucro, 1.5% Risco)
+                preco_compra = sim['gatilhos'][simbolo]
+                sim['posicoes'][simbolo] = {
+                    'entrada': preco_compra,
+                    'tp': preco_compra * 1.03,
+                    'sl': preco_compra * 0.985,
+                    'hora': datetime.now(tz_br).strftime('%H:%M:%S')
+                }
+                del sim['gatilhos'][simbolo]
+                
+            elif "QUARENTENA" in res['Veredicto'] or "BLOQUEIO" in res['Veredicto']:
+                # Cenário piorou, remove o gatilho da memória
+                if simbolo in sim['gatilhos']: del sim['gatilhos'][simbolo]
+                
+            elif "$" in res['Gatilho Executor']:
+                # Arma/Atualiza o gatilho na memória
+                preco_alvo = float(res['Gatilho Executor'].replace('$', ''))
+                sim['gatilhos'][simbolo] = preco_alvo
 
 def varredura_global():
-    esquadrao = [
-        'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'ADA/USDT', 
-        'DOT/USDT', 'LINK/USDT', 'AVAX/USDT', 'NEAR/USDT', 'SUI/USDT'
-    ]
+    esquadrao = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'ADA/USDT', 'DOT/USDT', 'LINK/USDT', 'AVAX/USDT', 'NEAR/USDT', 'SUI/USDT']
     resultados = [analise_autobolt(moeda) for moeda in esquadrao]
+    gerenciar_simulador(resultados) # Atualiza o Paper Trading silenciosamente
     return resultados
