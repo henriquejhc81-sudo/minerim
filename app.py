@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import motor_mestre 
+import time  # <-- Import crucial para o loop autônomo
 
 st.set_page_config(
     page_title="AUTOBOLT OS // INSTITUCIONAL",
@@ -40,13 +41,13 @@ def buscar_dados_inteligentes():
 
 with st.spinner("Sincronizando fractais e processando simulações no motor K-Node..."):
     dados_mercado = buscar_dados_inteligentes()
-    df = pd.DataFrame(dados_mercado).drop(columns=['_raw_preco'], errors='ignore') # Esconde o dado bruto
+    df = pd.DataFrame(dados_mercado).drop(columns=['_raw_preco'], errors='ignore') 
 
 # CRIANDO AS ABAS
 aba_matriz, aba_simulador = st.tabs(["📡 MATRIX DE DECISÃO", "🕹️ SIMULADOR DE OPERAÇÕES"])
 
 # ==========================================
-# ABA 1: MATRIX DE DECISÃO (Painel Original)
+# ABA 1: MATRIX DE DECISÃO 
 # ==========================================
 with aba_matriz:
     def colorir_tabela(val):
@@ -77,13 +78,11 @@ with aba_matriz:
 # ABA 2: SIMULADOR DE EXECUÇÃO (Paper Trading)
 # ==========================================
 with aba_simulador:
-    # Resgata o estado atualizado da memória do motor
     sim_state = motor_mestre.get_simulador_state()
     
     st.markdown("### 📊 DASHBOARD FINANCEIRO VIRTUAL")
     c_s1, c_s2, c_s3, c_s4 = st.columns(4)
     
-    # Renderiza KPIs
     with c_s1: st.metric("Banca Simulada", f"${sim_state['saldo_virtual']:,.2f}")
     with c_s2: st.metric("Desempenho Geral (PNL)", f"{sim_state['pnl_total']:+.2f}%")
     with c_s3: st.metric("Posições Abertas (Real-Time)", len(sim_state['posicoes']))
@@ -113,3 +112,17 @@ with aba_simulador:
         st.dataframe(df_hist.style.map(colorir_hist), use_container_width=True, hide_index=True)
     else:
         st.caption("Quando uma operação atingir o alvo ou o stop loss, o resultado aparecerá aqui.")
+
+# ==========================================
+# ⚡ O CORAÇÃO DO ROBÔ (LOOP AUTÔNOMO)
+# ==========================================
+st.markdown("<br><hr style='border:1px solid #1e293b; margin: 10px 0;'>", unsafe_allow_html=True)
+st.markdown(
+    "<div style='text-align: center; color: #10b981; font-size: 11px; font-family: monospace;'>"
+    "⚡ MOTOR AUTÔNOMO ATIVADO: ESCANEANDO MERCADO EM TEMPO REAL...</div>", 
+    unsafe_allow_html=True
+)
+
+# Atualiza a interface a cada 60 segundos
+time.sleep(60) 
+st.rerun()
